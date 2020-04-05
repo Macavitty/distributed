@@ -1,5 +1,6 @@
 #include <getopt.h>
 #include <stdarg.h>
+#include <sys/types.h>
 #include <time.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -90,6 +91,7 @@ static int get_child_process_num(int argc, char **argv) {
         }
         return -1;
     }
+    return 0;
 }
 
 static int close_my_channels_ends(Process *me) {

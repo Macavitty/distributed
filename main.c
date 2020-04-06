@@ -1,5 +1,4 @@
 #include <getopt.h>
-#include <stdarg.h>
 #include <sys/types.h>
 #include <time.h>
 #include <stdlib.h>
@@ -10,24 +9,27 @@
 
 #include "ipc.h"
 #include "pa1.h"
-#include "common.h"
 #include "process.h"
+#include "logger.h"
 
 
 int r_ends[MAX_PROCESS_ID][MAX_PROCESS_ID]; // i - sender; j - receiver
 int w_ends[MAX_PROCESS_ID][MAX_PROCESS_ID]; // i - sender; j - receiver
-FILE* events_log_f;
-FILE* pipes_log_f;
+FILE *events_log_f;
+FILE *pipes_log_f;
 
 int get_child_process_num(int argc, char **argv);
-int init_log();
-int close_log();
-int write_log(FILE* log_file, const char *log_format, ...);
+
 int create_channels(int processes_count);
+
 int close_my_channels_ends(Process *me);
+
 int close_foreign_channels_ends(Process *me);
+
 int run_child(Process *p);
+
 int synchronize(Process *p, MessageType msg_t, FILE *log_file, const char *msg_fmt, const char *log_receiver_fmt);
+
 int work();
 
 int main(int argc, char *argv[]) {
@@ -68,14 +70,16 @@ int main(int argc, char *argv[]) {
     Message msg;
     msg.s_header.s_type = STARTED;
     receive_any(&process, &msg);
+    write_log(events_log_f, log_received_all_started_fmt, process.id);
+    write_log(stdout, log_received_all_started_fmt, process.id);
 
     // get all done
     msg.s_header.s_type = DONE;
     receive_any(&process, &msg);
-    write_log(events_log_f, log_received_all_started_fmt, process.id);
+    write_log(events_log_f, log_received_all_done_fmt, process.id);
+    write_log(stdout, log_received_all_done_fmt, process.id);
 
     close_my_channels_ends(&process);
-    write_log(events_log_f, log_received_all_done_fmt, process.id);
     close_log();
 
     // wait for all children
@@ -108,6 +112,8 @@ int create_channels(int processes_count) {
 
                 w_ends[sender][receiver] = pipe_fd[1];
                 r_ends[sender][receiver] = pipe_fd[0];
+
+                write_log(pipes_log_f, log_opened_channel_fmt, sender, receiver, pipe_fd[0], pipe_fd[1]);
             }
         }
     }
@@ -116,12 +122,18 @@ int create_channels(int processes_count) {
 
 int close_my_channels_ends(Process *me) {
     for (int sender = 0; sender < me->processes_count; sender++) {
-        if (sender != me->id)
+        if (sender != me->id) {
             close(r_ends[sender][me->id]);
+            write_log(pipes_log_f, log_closed_mine_channels_fmt, me->id, sender, me->id, "r-end",
+                      r_ends[sender][me->id]);
+        }
     }
     for (int receiver = 0; receiver < me->processes_count; receiver++) {
-        if (receiver != me->id)
+        if (receiver != me->id) {
             close(w_ends[me->id][receiver]);
+            write_log(pipes_log_f, log_closed_mine_channels_fmt, me->id, me->id, receiver, "w-end",
+                      w_ends[me->id][receiver]);
+        }
     }
     return 0;
 }
@@ -134,11 +146,25 @@ int close_foreign_channels_ends(Process *me) {
             if ((sender != me->id && receiver != me->id)) {
                 close(r_ends[sender][receiver]);
                 close(w_ends[sender][receiver]);
+                write_log(pipes_log_f,
+                          log_closed_foreign_channels_fmt,
+                          me->id, sender, receiver, "r-end", r_ends[sender][receiver]);
+                write_log(pipes_log_f,
+                          log_closed_foreign_channels_fmt,
+                          me->id, sender, receiver, "w-end", w_ends[sender][receiver]);
             }
-            if (sender == me->id)
+            if (sender == me->id) {
                 close(r_ends[sender][receiver]);
-            if (receiver == me->id)
+                write_log(pipes_log_f,
+                          log_closed_foreign_channels_fmt,
+                          me->id, sender, receiver, "r-end", r_ends[sender][receiver]);
+            }
+            if (receiver == me->id) {
                 close(w_ends[sender][receiver]);
+                write_log(pipes_log_f,
+                          log_closed_foreign_channels_fmt,
+                          me->id, sender, receiver, "w-end", w_ends[sender][receiver]);
+            }
         }
     }
     return 0;
@@ -146,16 +172,16 @@ int close_foreign_channels_ends(Process *me) {
 
 int run_child(Process *p) {
 
-    if (write_log(events_log_f, log_started_fmt, p->id, getpid(), getppid()) == -1)
-        return -1;
+    write_log(events_log_f, log_started_fmt, p->id, getpid(), getppid());
+    write_log(stdout, log_started_fmt, p->id, getpid(), getppid());
 
     // synchronize on start
     synchronize(p, STARTED, events_log_f, log_started_fmt, log_received_all_started_fmt);
 
     // do smth
     work();
-    if (write_log(events_log_f, log_done_fmt, p->id) == -1)
-        return -1;
+    write_log(events_log_f, log_done_fmt, p->id);
+    write_log(stdout, log_done_fmt, p->id);
 
     // synchronize on start
     synchronize(p, DONE, events_log_f, log_done_fmt, log_received_all_done_fmt);
@@ -176,7 +202,7 @@ synchronize(Process *p, MessageType msg_t, FILE *log_file, const char *msg_fmt, 
     };
     msg.s_header = header;
 
-            // send to anyone who would listen
+    // send to anyone who would listen
     send_multicast(p, &msg);
 
     // receive  from others
@@ -185,8 +211,8 @@ synchronize(Process *p, MessageType msg_t, FILE *log_file, const char *msg_fmt, 
     oth_msg.s_header = oth_header;
     receive_any(p, &oth_msg);
 
-    if (write_log(log_file, log_receiver_fmt, p->id) == -1)
-        return -1;
+    write_log(log_file, log_receiver_fmt, p->id);
+    write_log(stdout, log_receiver_fmt, p->id);
 
     return 0;
 }
@@ -197,30 +223,6 @@ int work() {
     return 0;
 }
 
-int init_log() {
-    if ((events_log_f = fopen(events_log, "a")) == NULL ||
-        (pipes_log_f = fopen(pipes_log, "a")) == NULL)
-        return -1;
-    return 0;
-}
 
-int close_log() {
-    if (fclose(events_log_f) == 0 &&
-        fclose(pipes_log_f) == 0)
-        return 0;
-    return -1;
-}
-
-int write_log(FILE * log_file, const char *log_format, ...) {
-
-    va_list arg_ptr;
-    va_start(arg_ptr, log_format);
-
-    if (vfprintf(log_file, log_format, arg_ptr) < 0)
-        return -1;
-
-    va_end(arg_ptr);
-    return 0;
-}
 
 

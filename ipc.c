@@ -49,12 +49,16 @@ int receive(void *self, local_id from, Message *msg) {
 int receive_any(void *self, Message *msg) {
     Process *p = ((Process *) self);
 
-    int received = 0;
-    MessageType type = msg->s_header.s_type; // type of message we are waiting for
-    while(received < p->processes_count - 2){ // not counting this proc and parent
+    MessageType expected_type = msg->s_header.s_type;
+    int expected_msg_count = p->processes_count - 1;
+
+    if (! p->is_parent)
+        expected_msg_count--;
+
+    for (int received = 0; received < expected_msg_count;){
         for (int i = 1; i < p->processes_count; i++) {
             if (i != p->id)
-                if (receive(self, i, msg) == RESULT_SUCCESS && msg->s_header.s_type == type)
+                if (receive(self, i, msg) == RESULT_SUCCESS && msg->s_header.s_type == expected_type)
                     received++;
         }
     }

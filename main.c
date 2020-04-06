@@ -16,15 +16,18 @@
 
 int r_ends[MAX_PROCESS_ID][MAX_PROCESS_ID]; // i - sender; j - receiver
 int w_ends[MAX_PROCESS_ID][MAX_PROCESS_ID]; // i - sender; j - receiver
+FILE* events_log_f;
+FILE* pipes_log_f;
 
 static int get_child_process_num(int argc, char **argv);
 static int init_log();
-static int write_log(const char *filename, const char *log_format, ...);
+static int close_log();
+static int write_log(FILE* log_file, const char *log_format, ...);
 static int create_channels(int processes_count);
 static int close_my_channels_ends(Process *me);
 static int close_foreign_channels_ends(Process *me);
 static int run_child(Process *p);
-static int synchronize(Process *p, MessageType msg_t, const char *log_file, const char *msg_fmt, const char *log_receiver_fmt);
+static int synchronize(Process *p, MessageType msg_t, FILE *log_file, const char *msg_fmt, const char *log_receiver_fmt);
 static int work();
 
 int main(int argc, char *argv[]) {
@@ -69,10 +72,11 @@ int main(int argc, char *argv[]) {
     // get all done
     msg.s_header.s_type = DONE;
     receive_any(&process, &msg);
-    write_log(events_log, log_received_all_started_fmt, process.id);
+    write_log(events_log_f, log_received_all_started_fmt, process.id);
 
     close_my_channels_ends(&process);
-    write_log(events_log, log_received_all_done_fmt, process.id);
+    write_log(events_log_f, log_received_all_done_fmt, process.id);
+    close_log();
 
     // wait for all children
     for (int i = 0; i < process.processes_count; i++) {
@@ -142,36 +146,37 @@ static int close_foreign_channels_ends(Process *me) {
 
 static int run_child(Process *p) {
 
-    if (write_log(events_log, log_started_fmt, p->id, getpid(), getppid()) == -1)
+    if (write_log(events_log_f, log_started_fmt, p->id, getpid(), getppid()) == -1)
         return -1;
 
     // synchronize on start
-    synchronize(p, STARTED, events_log, log_started_fmt, log_received_all_started_fmt);
+    synchronize(p, STARTED, events_log_f, log_started_fmt, log_received_all_started_fmt);
 
     // do smth
     work();
-    if (write_log(events_log, log_done_fmt, p->id) == -1)
+    if (write_log(events_log_f, log_done_fmt, p->id) == -1)
         return -1;
 
     // synchronize on start
-    synchronize(p, DONE, events_log, log_done_fmt, log_received_all_done_fmt);
+    synchronize(p, DONE, events_log_f, log_done_fmt, log_received_all_done_fmt);
     return 0;
 }
 
 static int
-synchronize(Process *p, MessageType msg_t, const char *log_file, const char *msg_fmt, const char *log_receiver_fmt) {
+synchronize(Process *p, MessageType msg_t, FILE *log_file, const char *msg_fmt, const char *log_receiver_fmt) {
+
+    Message msg;
+    sprintf(msg.s_payload, msg_fmt, p->id, getpid(), getppid());
+
     MessageHeader header = {
             .s_magic = MESSAGE_MAGIC,
             .s_type = msg_t,
             .s_local_time = time(0),
-            .s_payload_len = strlen(msg_fmt) + sizeof(local_id) + sizeof(pid_t) * 2
+            .s_payload_len = strlen(msg.s_payload)
     };
-    Message msg = {
-            .s_header = header,
-    };
-    sprintf(msg.s_payload, msg_fmt, p->id, getpid(), getppid());
+    msg.s_header = header;
 
-    // send to anyone who would listen
+            // send to anyone who would listen
     send_multicast(p, &msg);
 
     // receive  from others
@@ -193,26 +198,28 @@ static int work() {
 }
 
 static int init_log() {
-    if (fclose(fopen(events_log, "w")) == 0 &&
-        fclose(fopen(pipes_log, "w")) == 0)
+    if ((events_log_f = fopen(events_log, "a")) == NULL ||
+        (pipes_log_f = fopen(pipes_log, "a")) == NULL)
+        return -1;
+    return 0;
+}
+
+static int close_log() {
+    if (fclose(events_log_f) == 0 &&
+        fclose(pipes_log_f) == 0)
         return 0;
     return -1;
 }
 
-static int write_log(const char *filename, const char *log_format, ...) {
+static int write_log(FILE * log_file, const char *log_format, ...) {
 
     va_list arg_ptr;
     va_start(arg_ptr, log_format);
 
-    FILE *f;
-    f = fopen(filename, "a");
-    if (f == NULL) return -1;
-
-    if (vfprintf(f, log_format, arg_ptr) < 0)
+    if (vfprintf(log_file, log_format, arg_ptr) < 0)
         return -1;
 
     va_end(arg_ptr);
-    fclose(f);
     return 0;
 }
 
